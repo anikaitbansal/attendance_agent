@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI
 
+from app.agent_service import run_agent
 from app.attendance_service import check_in, check_out, get_today
 from app.database import initialise_database, list_employees
 from app.leave_service import (
@@ -11,8 +13,15 @@ from app.leave_service import (
     list_leaves,
     list_pending_leaves,
 )
+from app.query_service import (
+    get_attendance_history,
+    get_missing_checkouts,
+    get_weekly_hours,
+)
 from app.schemas import (
     AttendanceRecord,
+    AgentChatRequest,
+    AgentChatResponse,
     CheckInRequest,
     CheckOutRequest,
     Employee,
@@ -20,6 +29,7 @@ from app.schemas import (
     LeaveRecord,
     LeaveDecisionRequest,
     LeaveRequest,
+    WeeklyHoursSummary,
 )
 
 
@@ -95,4 +105,47 @@ def make_leave_decision(leave_id: int, request: LeaveDecisionRequest) -> dict:
         manager_id=request.manager_id,
         decision=request.decision,
         comment=request.comment,
+    )
+
+
+@app.get(
+    "/attendance/{employee_id}/history",
+    response_model=list[AttendanceRecord],
+)
+def get_employee_attendance_history(
+    employee_id: int,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
+    return get_attendance_history(employee_id, start_date, end_date)
+
+
+@app.get(
+    "/reports/{employee_id}/weekly-hours",
+    response_model=WeeklyHoursSummary,
+)
+def get_employee_weekly_hours(
+    employee_id: int,
+    week_start: date | None = None,
+) -> dict:
+    return get_weekly_hours(employee_id, week_start)
+
+
+@app.get(
+    "/admin/attendance/missing-checkout",
+    response_model=list[AttendanceRecord],
+)
+def get_missing_checkout_report(
+    manager_id: int,
+    work_date: date | None = None,
+) -> list[dict]:
+    return get_missing_checkouts(manager_id, work_date)
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+def chat_with_attendance_agent(request: AgentChatRequest) -> dict:
+    return run_agent(
+        employee_id=request.employee_id,
+        message=request.message,
+        manager_id=request.manager_id,
     )

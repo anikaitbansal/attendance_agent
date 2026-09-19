@@ -74,3 +74,28 @@ class LeaveDecisionRequest(BaseModel):
     manager_id: int = Field(gt=0)
     decision: Literal["APPROVED", "REJECTED"]
     comment: str = Field(default="", max_length=300)
+
+
+class WeeklyHoursSummary(BaseModel):
+    employee_id: int
+    employee_name: str
+    week_start: date
+    week_end: date
+    total_worked_minutes: int
+    total_worked_hours: float
+    completed_days: int
+    open_sessions: int
+    records: list[AttendanceRecord]
+
+
+class AgentChatRequest(BaseModel):
+    employee_id: int = Field(gt=0)
+    message: str = Field(min_length=2, max_length=500)
+    manager_id: int | None = Field(default=None, gt=0)
+
+
+class AgentChatResponse(BaseModel):
+    reply: str
+    intent: str
+    tool_used: str | None
+    interpretation_source: Literal["groq", "fallback"]
