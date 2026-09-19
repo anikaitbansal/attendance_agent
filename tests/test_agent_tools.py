@@ -124,3 +124,9 @@ def test_missing_checkouts_uses_signed_in_employee_not_model_input() -> None:
         call, config={"configurable": {"employee_id": 1}}
     )
     assert as_staff.content.startswith("ERROR: Only an active manager")
+
+
+def test_empty_results_are_text_not_empty_lists() -> None:
+    # Groq rejects a tool message whose content is []; that failed whole turns.
+    assert show_my_leaves.invoke({"employee_id": 1}) == "No records found."
+    assert show_attendance_history.invoke({"employee_id": 1}) == "No records found."

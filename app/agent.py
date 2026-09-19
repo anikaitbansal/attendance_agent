@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
+from groq import RateLimitError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -26,7 +27,7 @@ from app.query_service import (
 load_dotenv()
 
 IST = ZoneInfo("Asia/Kolkata")
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 SYSTEM_PROMPT = """You are the AI Attendance Agent for a small company.
 
@@ -35,21 +36,23 @@ calling the tools available to you.
 
 Context for this conversation:
 - The employee you are helping has employee_id {employee_id}.
-- Today's date in Asia/Kolkata is {today}.
-- The current time in Asia/Kolkata is {now}.
+- Today is {weekday}, {today} (Asia/Kolkata). The time is {now}.
+- The next 14 days are: {calendar}.
 
 Rules:
 - Always pass {employee_id} as the employee_id argument unless the user is
   clearly asking about somebody else by name; in that case call
   lookup_employees first to resolve the name to an id.
-- Resolve relative dates ("tomorrow", "next Monday") against today's date
-  yourself, and pass tools an ISO date in YYYY-MM-DD form.
+- Resolve relative dates ("tomorrow", "next Friday") by reading them off the
+  list of the next 14 days above, and pass tools an ISO date in YYYY-MM-DD form.
 - Never invent attendance or leave data. If a tool reports an error, explain
   what went wrong in one short sentence and suggest the next step.
 - Before cancelling a leave, make sure you know its leave id; call
   show_my_leaves if you need to find it.
 - For questions about hours worked or past attendance, use show_weekly_hours
   or show_attendance_history rather than guessing from today's record.
+- Only suggest next steps the tools can actually do. There is one attendance
+  record per day: after checking out, an employee cannot check in again that day.
 - Keep replies to a couple of short sentences. This is a chat window, not a
   report. Mention worked hours rather than raw minutes when both are present.
 """
@@ -63,9 +66,11 @@ def _parse_date(value: str | None) -> date | None:
 def _call(action: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Run a service call and turn API errors into text the model can act on."""
     try:
-        return action(*args, **kwargs)
+        result = action(*args, **kwargs)
     except HTTPException as error:
         return f"ERROR: {error.detail}"
+    # Groq rejects a tool message whose content is an empty list.
+    return result if result != [] else "No records found."
 
 
 @tool
@@ -233,10 +238,18 @@ def run_agent(
         )
 
     now = datetime.now(IST)
+    today = now.date()
+    # Small models get weekday arithmetic wrong, so hand them a calendar.
+    calendar = ", ".join(
+        f"{day:%a} {day.isoformat()}"
+        for day in (today + timedelta(days=offset) for offset in range(1, 15))
+    )
     prompt = SYSTEM_PROMPT.format(
         employee_id=employee_id,
-        today=now.date().isoformat(),
+        weekday=f"{today:%A}",
+        today=today.isoformat(),
         now=now.strftime("%H:%M"),
+        calendar=calendar,
     )
 
     agent = build_agent(os.getenv("GROQ_MODEL", DEFAULT_MODEL))
@@ -248,6 +261,14 @@ def run_agent(
             {"messages": messages},
             config={"configurable": {"employee_id": employee_id}},
         )
+    except RateLimitError as error:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "The Groq free tier only allows a few requests per minute. "
+                "Wait about 30 seconds and try again."
+            ),
+        ) from error
     except Exception as error:  # noqa: BLE001 - surfaced to the chat window
         raise HTTPException(
             status_code=502,
