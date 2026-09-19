@@ -108,12 +108,36 @@ def api(method: str, path: str, **kwargs) -> tuple[bool, object]:
         return False, response.text
 
 
-def show(ok: bool, payload: object, success: str) -> None:
-    if ok:
-        st.success(success)
-        st.json(payload)
-    else:
-        st.error(payload)
+WORK_MODES = {"OFFICE": "🏢 Office", "WFH": "🏠 Work from home"}
+LEAVE_STATUSES = {
+    "PENDING": "⏳ Pending",
+    "APPROVED": "✅ Approved",
+    "REJECTED": "❌ Rejected",
+    "CANCELLED": "🚫 Cancelled",
+}
+
+
+def clock(timestamp: str | None) -> str:
+    """'2026-09-19T09:30:00+05:30' -> '09:30'."""
+    return datetime.fromisoformat(timestamp).strftime("%H:%M") if timestamp else "—"
+
+
+def nice_date(value: str) -> str:
+    """'2026-09-25' -> '25 Sep 2026'."""
+    return datetime.fromisoformat(value).strftime("%d %b %Y")
+
+
+def leave_dates(leave: dict) -> str:
+    start, end = leave["start_date"], leave["end_date"]
+    if start == end:
+        return nice_date(start)
+    return f"{nice_date(start)} → {nice_date(end)}"
+
+
+def show_flash(key: str) -> None:
+    """Show a message saved before st.rerun(), which would otherwise wipe it."""
+    if message := st.session_state.pop(key, None):
+        st.success(message)
 
 
 ok, health = api("GET", "/health")
@@ -231,14 +255,25 @@ with attendance_tab:
 
     with left:
         st.subheader("Check in")
-        work_mode = st.radio("Work mode", ["OFFICE", "WFH"], horizontal=True)
+        work_mode = st.radio(
+            "Work mode",
+            list(WORK_MODES),
+            format_func=WORK_MODES.get,
+            horizontal=True,
+        )
         if st.button("Check in", type="primary"):
             ok, payload = api(
                 "POST",
                 "/attendance/check-in",
                 json={"employee_id": employee_id, "work_mode": work_mode},
             )
-            show(ok, payload, f"Checked in ({work_mode}).")
+            if ok:
+                st.success(
+                    f"Checked in at {clock(payload['check_in'])} · "
+                    f"{WORK_MODES[payload['work_mode']]}"
+                )
+            else:
+                st.error(payload)
 
         st.subheader("Check out")
         break_minutes = st.number_input("Break minutes", 0, 240, 0, step=15)
@@ -248,7 +283,15 @@ with attendance_tab:
                 "/attendance/check-out",
                 json={"employee_id": employee_id, "break_minutes": break_minutes},
             )
-            show(ok, payload, "Checked out.")
+            if ok:
+                taken = payload["break_minutes"]
+                st.success(
+                    f"Checked out at {clock(payload['check_out'])} · "
+                    f"{payload['worked_hours']:.2f} h worked"
+                    + (f" after a {taken} min break" if taken else "")
+                )
+            else:
+                st.error(payload)
 
     with right:
         st.subheader("Today")
@@ -256,13 +299,25 @@ with attendance_tab:
         if not ok:
             st.info(payload)
         else:
-            st.metric("State", payload["state"].replace("_", " ").title())
+            done = payload["state"] == "COMPLETED"
             hours = payload["worked_hours"]
-            st.metric("Worked hours", "—" if hours is None else f"{hours:.2f}")
-            st.json(payload)
+            status_col, hours_col = st.columns(2)
+            status_col.metric("Status", "Checked out" if done else "Checked in")
+            hours_col.metric(
+                "Worked", f"{hours:.2f} h" if hours is not None else "In progress"
+            )
+
+            in_col, out_col, break_col = st.columns(3)
+            in_col.metric("Check-in", clock(payload["check_in"]))
+            out_col.metric("Check-out", clock(payload["check_out"]))
+            break_col.metric("Break", f"{payload['break_minutes']} min")
+            st.caption(
+                f"{WORK_MODES[payload['work_mode']]} · {nice_date(payload['work_date'])}"
+            )
 
 
 with leave_tab:
+    show_flash("leave_flash")
     left, right = st.columns(2)
 
     with left:
@@ -270,7 +325,9 @@ with leave_tab:
         today = datetime.now(IST).date()
         start_date = st.date_input("Start date", today)
         end_date = st.date_input("End date", today)
-        leave_type = st.selectbox("Type", ["CASUAL", "SICK", "OTHER"])
+        leave_type = st.selectbox(
+            "Type", ["CASUAL", "SICK", "OTHER"], format_func=str.title
+        )
         reason = st.text_area("Reason", placeholder="At least 3 characters")
 
         if st.button("Request leave", type="primary"):
@@ -288,7 +345,13 @@ with leave_tab:
                         "reason": reason.strip(),
                     },
                 )
-                show(ok, payload, "Leave requested — waiting for a manager decision.")
+                if ok:
+                    st.success(
+                        f"{payload['leave_type'].title()} leave requested for "
+                        f"{leave_dates(payload)}. Waiting for a manager decision."
+                    )
+                else:
+                    st.error(payload)
 
     with right:
         st.subheader("Leave history")
@@ -301,12 +364,12 @@ with leave_tab:
             st.dataframe(
                 [
                     {
-                        "id": leave["id"],
-                        "from": leave["start_date"],
-                        "to": leave["end_date"],
-                        "type": leave["leave_type"],
-                        "status": leave["status"],
-                        "reason": leave["reason"],
+                        "Request": f"#{leave['id']}",
+                        "Dates": leave_dates(leave),
+                        "Type": leave["leave_type"].title(),
+                        "Status": LEAVE_STATUSES[leave["status"]],
+                        "Reason": leave["reason"],
+                        "Manager note": leave["decision_comment"] or "",
                     }
                     for leave in leaves
                 ],
@@ -314,24 +377,33 @@ with leave_tab:
                 width="stretch",
             )
 
-            cancellable = [
-                leave["id"]
+            by_id = {
+                leave["id"]: leave
                 for leave in leaves
                 if leave["status"] in {"PENDING", "APPROVED"}
-            ]
-            if cancellable:
-                leave_id = st.selectbox("Cancel leave id", cancellable)
+            }
+            if by_id:
+                leave_id = st.selectbox(
+                    "Cancel a leave",
+                    list(by_id),
+                    format_func=lambda i: (
+                        f"#{i} · {by_id[i]['leave_type'].title()} · "
+                        f"{leave_dates(by_id[i])}"
+                    ),
+                )
                 if st.button("Cancel leave"):
                     ok, payload = api("DELETE", f"/leaves/{leave_id}")
-                    show(ok, payload, f"Leave {leave_id} cancelled.")
-                    st.rerun()
+                    if ok:
+                        st.session_state["leave_flash"] = (
+                            f"Leave #{leave_id} for {leave_dates(payload)} cancelled."
+                        )
+                        st.rerun()
+                    st.error(payload)
 
 
 if admin_tab is not None:
     with admin_tab:
-        # Survives the rerun that refreshes the queue after a decision.
-        if flash := st.session_state.pop("admin_flash", None):
-            st.success(flash)
+        show_flash("admin_flash")
 
         st.subheader("Pending leave queue")
         ok, pending = api(
@@ -346,12 +418,11 @@ if admin_tab is not None:
             st.dataframe(
                 [
                     {
-                        "id": leave["id"],
-                        "who": leave["employee_name"],
-                        "from": leave["start_date"],
-                        "to": leave["end_date"],
-                        "type": leave["leave_type"],
-                        "reason": leave["reason"],
+                        "Request": f"#{leave['id']}",
+                        "Employee": leave["employee_name"],
+                        "Dates": leave_dates(leave),
+                        "Type": leave["leave_type"].title(),
+                        "Reason": leave["reason"],
                     }
                     for leave in pending
                 ],
@@ -367,11 +438,11 @@ if admin_tab is not None:
                 "Leave request",
                 list(by_id),
                 format_func=lambda i: (
-                    f"#{i} · {by_id[i]['employee_name']} · "
-                    f"{by_id[i]['start_date']} to {by_id[i]['end_date']}"
+                    f"#{i} · {by_id[i]['employee_name']} · {leave_dates(by_id[i])}"
                 ),
             )
-            st.caption(f"{by_id[leave_id]['leave_type']} · {by_id[leave_id]['reason']}")
+            chosen = by_id[leave_id]
+            st.caption(f"{chosen['leave_type'].title()} leave · {chosen['reason']}")
             comment = st.text_input("Comment (optional)", max_chars=300)
 
             def decide(decision: str) -> None:
