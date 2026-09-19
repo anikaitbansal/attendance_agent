@@ -7,8 +7,11 @@ Run the API first, then in a second terminal:
 
 from __future__ import annotations
 
+import base64
 import os
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -21,8 +24,54 @@ load_dotenv()
 IST = ZoneInfo("Asia/Kolkata")
 API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 TIMEOUT = 60
+ASSETS = Path(__file__).parent / "assets"
 
-st.set_page_config(page_title="AI Attendance Agent", page_icon="🕘", layout="wide")
+st.set_page_config(
+    page_title="KarmaVerse · Attendance Agent",
+    page_icon=str(ASSETS / "karmaverse_icon.png"),
+    layout="wide",
+)
+
+
+@lru_cache(maxsize=None)
+def data_uri(name: str) -> str:
+    encoded = base64.b64encode((ASSETS / name).read_bytes()).decode()
+    return f"data:image/png;base64,{encoded}"
+
+
+def render_mascot() -> None:
+    """Pin the KarmaVerse mascot to the bottom-right corner, gently bobbing.
+
+    It sits above the chat input and ignores clicks so it never blocks the UI.
+    """
+    st.markdown(
+        f"""
+        <style>
+        .kv-mascot {{
+            position: fixed;
+            right: 28px;
+            bottom: 104px;
+            width: 120px;
+            z-index: 1000;
+            pointer-events: none;
+            filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.18));
+            animation: kv-float 3.2s ease-in-out infinite;
+        }}
+        @keyframes kv-float {{
+            0%, 100% {{ transform: translateY(0) rotate(-2deg); }}
+            50% {{ transform: translateY(-12px) rotate(2deg); }}
+        }}
+        @media (max-width: 640px) {{
+            .kv-mascot {{ width: 72px; right: 12px; }}
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+            .kv-mascot {{ animation: none; }}
+        }}
+        </style>
+        <img class="kv-mascot" src="{data_uri("mascot.png")}" alt="KarmaVerse mascot">
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def api(method: str, path: str, **kwargs) -> tuple[bool, object]:
@@ -63,7 +112,10 @@ if not ok:
 
 by_label = {f"{e['name']} (#{e['id']})": e for e in employees}
 
+render_mascot()
+
 with st.sidebar:
+    st.image(str(ASSETS / "karmaverse_logo.png"), width="stretch")
     st.header("Who are you?")
     label = st.selectbox("Employee", list(by_label))
     employee = by_label[label]

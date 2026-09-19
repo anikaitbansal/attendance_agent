@@ -1,0 +1,8 @@
+# KarmaVerse brand theme, sampled from ui/assets/karmaverse_logo.png.
+# The logo artwork is dark-on-white, so the UI stays on the light base.
+[theme]
+base = "light"
+primaryColor = "#0F5A14"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F6EF"
+textColor = "#14210F"
