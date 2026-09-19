@@ -4,6 +4,7 @@ from datetime import date
 from fastapi import FastAPI
 
 from app.agent import agent_is_configured, run_agent
+from app.agent_service import run_agent as run_fallback_agent
 from app.attendance_service import check_in, check_out, get_today
 from app.database import initialise_database, list_employees
 from app.leave_service import (
@@ -24,8 +25,6 @@ from app.schemas import (
     AgentChatRequest,
     AgentChatResponse,
     AttendanceRecord,
-    AgentChatRequest,
-    AgentChatResponse,
     CheckInRequest,
     CheckOutRequest,
     Employee,
@@ -125,12 +124,32 @@ def make_leave_decision(leave_id: int, request: LeaveDecisionRequest) -> dict:
 
 @app.post("/agent/chat", response_model=AgentChatResponse)
 def chat_with_agent(request: AgentChatRequest) -> AgentChatResponse:
-    reply = run_agent(
+    if not agent_is_configured():
+        # Without a Groq key, the keyword router in agent_service still handles
+        # simple requests so the demo chat never goes dark.
+        result = run_fallback_agent(
+            request.employee_id,
+            request.message,
+            manager_id=request.employee_id,
+        )
+        return AgentChatResponse(
+            employee_id=request.employee_id,
+            reply=result["reply"],
+            tools_used=[result["tool_used"]] if result["tool_used"] else [],
+            interpretation_source="fallback",
+        )
+
+    result = run_agent(
         message=request.message,
         employee_id=request.employee_id,
         history=[turn.model_dump() for turn in request.history],
     )
-    return AgentChatResponse(employee_id=request.employee_id, reply=reply)
+    return AgentChatResponse(
+        employee_id=request.employee_id,
+        reply=result["reply"],
+        tools_used=result["tools_used"],
+        interpretation_source="groq",
+    )
 
 
 @app.get("/notifications/{employee_id}", response_model=list[NotificationRecord])

@@ -9,12 +9,18 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
 from app.attendance_service import check_in, check_out, get_today
 from app.database import list_employees
 from app.leave_service import cancel_leave, create_leave, list_leaves
+from app.query_service import (
+    get_attendance_history,
+    get_missing_checkouts,
+    get_weekly_hours,
+)
 
 
 load_dotenv()
@@ -42,9 +48,16 @@ Rules:
   what went wrong in one short sentence and suggest the next step.
 - Before cancelling a leave, make sure you know its leave id; call
   show_my_leaves if you need to find it.
+- For questions about hours worked or past attendance, use show_weekly_hours
+  or show_attendance_history rather than guessing from today's record.
 - Keep replies to a couple of short sentences. This is a chat window, not a
   report. Mention worked hours rather than raw minutes when both are present.
 """
+
+
+def _parse_date(value: str | None) -> date | None:
+    """Parse an optional ISO date, raising ValueError on bad input."""
+    return date.fromisoformat(value) if value else None
 
 
 def _call(action: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -112,6 +125,49 @@ def cancel_my_leave(leave_id: int) -> Any:
 
 
 @tool
+def show_weekly_hours(employee_id: int, week_start: str | None = None) -> Any:
+    """Total hours worked in one Monday-to-Sunday week.
+
+    week_start is that Monday as an ISO date; omit it for the current week.
+    """
+    try:
+        start = _parse_date(week_start)
+    except ValueError:
+        return "ERROR: week_start must be in YYYY-MM-DD form."
+    return _call(get_weekly_hours, employee_id, start)
+
+
+@tool
+def show_attendance_history(
+    employee_id: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Any:
+    """List attendance records between two ISO dates. Defaults to the last 30 days."""
+    try:
+        start, end = _parse_date(start_date), _parse_date(end_date)
+    except ValueError:
+        return "ERROR: dates must be in YYYY-MM-DD form."
+    return _call(get_attendance_history, employee_id, start, end)
+
+
+@tool
+def show_missing_checkouts(config: RunnableConfig, work_date: str | None = None) -> Any:
+    """Managers only: staff who checked in on a date but never checked out.
+
+    work_date is an ISO date; omit it for today.
+    """
+    # Permission comes from the signed-in employee, never from a model-chosen
+    # id, so a prompt cannot talk the agent into running a manager report.
+    manager_id = config["configurable"]["employee_id"]
+    try:
+        day = _parse_date(work_date)
+    except ValueError:
+        return "ERROR: work_date must be in YYYY-MM-DD form."
+    return _call(get_missing_checkouts, manager_id, day)
+
+
+@tool
 def lookup_employees() -> Any:
     """List all employees with their ids, useful for resolving a name to an id."""
     return list_employees()
@@ -124,6 +180,9 @@ TOOLS = [
     request_leave,
     show_my_leaves,
     cancel_my_leave,
+    show_weekly_hours,
+    show_attendance_history,
+    show_missing_checkouts,
     lookup_employees,
 ]
 
@@ -159,8 +218,11 @@ def run_agent(
     message: str,
     employee_id: int,
     history: list[dict] | None = None,
-) -> str:
-    """Answer one chat turn on behalf of an employee."""
+) -> dict:
+    """Answer one chat turn on behalf of an employee.
+
+    Returns the reply and the names of the tools called, in order.
+    """
     if not agent_is_configured():
         raise HTTPException(
             status_code=503,
@@ -182,11 +244,21 @@ def run_agent(
     messages.append(HumanMessage(content=message))
 
     try:
-        result = agent.invoke({"messages": messages})
+        result = agent.invoke(
+            {"messages": messages},
+            config={"configurable": {"employee_id": employee_id}},
+        )
     except Exception as error:  # noqa: BLE001 - surfaced to the chat window
         raise HTTPException(
             status_code=502,
             detail=f"The language model call failed: {error}",
         ) from error
 
-    return result["messages"][-1].content
+    new_messages = result["messages"][len(messages):]
+    tools_used = [
+        call["name"]
+        for turn in new_messages
+        if isinstance(turn, AIMessage)
+        for call in turn.tool_calls
+    ]
+    return {"reply": result["messages"][-1].content, "tools_used": tools_used}

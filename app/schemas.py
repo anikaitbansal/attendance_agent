@@ -69,6 +69,11 @@ class AgentChatRequest(BaseModel):
 class AgentChatResponse(BaseModel):
     employee_id: int
     reply: str
+    # Tools the agent called this turn, in order, so the UI can show its work.
+    tools_used: list[str] = Field(default_factory=list)
+    # "groq" is the full ReAct agent; "fallback" is the keyword router used
+    # when no GROQ_API_KEY is configured.
+    interpretation_source: Literal["groq", "fallback"]
 
 
 class LeaveRecord(BaseModel):
@@ -103,19 +108,6 @@ class WeeklyHoursSummary(BaseModel):
     completed_days: int
     open_sessions: int
     records: list[AttendanceRecord]
-
-
-class AgentChatRequest(BaseModel):
-    employee_id: int = Field(gt=0)
-    message: str = Field(min_length=2, max_length=500)
-    manager_id: int | None = Field(default=None, gt=0)
-
-
-class AgentChatResponse(BaseModel):
-    reply: str
-    intent: str
-    tool_used: str | None
-    interpretation_source: Literal["groq", "fallback"]
 
 
 class NotificationRecord(BaseModel):

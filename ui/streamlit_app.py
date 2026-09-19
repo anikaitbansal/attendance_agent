@@ -175,20 +175,27 @@ admin_tab = tabs[3] if employee["is_admin"] else None
 
 with chat_tab:
     if not health.get("agent_ready"):
-        st.warning(
-            "Add a free Groq key to `.env` as `GROQ_API_KEY` and restart the API "
-            "to enable chat. The Attendance and Leave tabs work without it."
+        st.info(
+            "Basic mode: without a Groq key the chat understands simple requests "
+            "such as *hours this week*, *am I checked in*, *my leave history* or "
+            "*apply for leave on 2026-10-02*. Add `GROQ_API_KEY` to `.env` and "
+            "restart the API for full conversations."
         )
 
     history = st.session_state.setdefault("history", {})
     messages = history.setdefault(employee_id, [])
 
+    def show_tools(tools: list[str]) -> None:
+        if tools:
+            st.caption("🔧 " + " → ".join(tools))
+
     for turn in messages:
         with st.chat_message(turn["role"]):
             st.markdown(turn["content"])
+            show_tools(turn.get("tools", []))
 
-    placeholder = "Try: check me in from home, or book leave next Friday"
-    if prompt := st.chat_input(placeholder, disabled=not health.get("agent_ready")):
+    placeholder = "Try: check me in from home, or how many hours this week?"
+    if prompt := st.chat_input(placeholder):
         messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -201,13 +208,18 @@ with chat_tab:
                     "employee_id": employee_id,
                     "message": prompt,
                     # Send prior turns only; this turn is the message field.
-                    "history": messages[:-1],
+                    "history": [
+                        {"role": t["role"], "content": t["content"]}
+                        for t in messages[:-1]
+                    ],
                 },
             )
             reply = payload["reply"] if ok else f"Sorry — {payload}"
+            tools = payload["tools_used"] if ok else []
             st.markdown(reply)
+            show_tools(tools)
 
-        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "assistant", "content": reply, "tools": tools})
 
     if messages and st.button("Clear conversation"):
         history[employee_id] = []

@@ -49,10 +49,19 @@ attendance blocks conflicting approval, and overlapping requests are rejected.
 
 ## Step 4 Chat agent
 
-`POST /agent/chat` accepts `{employee_id, message, history}` and replies in
-plain language. It is a LangGraph ReAct agent over Groq that calls the same
-service functions the REST endpoints use, so every business rule above still
-applies.
+`POST /agent/chat` accepts `{employee_id, message, history}` and returns
+`{reply, tools_used, interpretation_source}`. Both agents call the same service
+functions the REST endpoints use, so every business rule above still applies.
+
+- **With `GROQ_API_KEY`** (`interpretation_source: "groq"`): a LangGraph ReAct
+  agent in `app/agent.py` that keeps the conversation and can check in and
+  out, request and cancel leave, and report weekly hours, attendance history
+  and (for admins) missing check-outs.
+- **Without a key** (`interpretation_source: "fallback"`): the keyword router
+  in `app/agent_service.py` handles one-line requests such as weekly hours,
+  today's status, leave history and `apply for leave on YYYY-MM-DD`.
+
+`tools_used` lists the tools called, which the UI shows under each reply.
 
 Copy `.env.example` to `.env` and add a free key from
 <https://console.groq.com/keys>:
@@ -61,8 +70,8 @@ Copy `.env.example` to `.env` and add a free key from
 GROQ_API_KEY=gsk_...
 ```
 
-Without a key the endpoint returns 503 and the rest of the API keeps working.
-`GET /health` reports `agent_ready` so the UI can hide the chat box.
+`GET /health` reports `agent_ready` (whether a Groq key is set) so the UI can
+explain when chat is running in basic mode.
 
 ## Step 5 Streamlit demo UI
 
@@ -72,8 +81,9 @@ streamlit run ui/streamlit_app.py
 ```
 
 Open `http://localhost:8501` with the API already running. Pick an employee in
-the sidebar, then use the Chat, Attendance and Leave tabs. Point the UI at a
-different API with `API_BASE_URL`.
+the sidebar, then use the Chat, Attendance and Leave tabs. The Chat tab works
+in basic mode without a Groq key. Point the UI at a different API with
+`API_BASE_URL`.
 
 Admins (the seeded HR user is Meera Iyer, #4) also get an Admin tab to approve
 or reject pending leave and to send reminders on demand.
