@@ -7,7 +7,13 @@ from fastapi import HTTPException
 
 import app.database as database
 from app.attendance_service import check_in
-from app.leave_service import cancel_leave, create_leave, list_leaves
+from app.leave_service import (
+    cancel_leave,
+    create_leave,
+    decide_leave,
+    list_leaves,
+    list_pending_leaves,
+)
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -28,6 +34,10 @@ def test_leave_blocks_check_in_until_cancelled() -> None:
         leave_type="CASUAL",
         reason="Family commitment",
     )
+
+    assert leave["status"] == "PENDING"
+    approved = decide_leave(leave["id"], 4, "APPROVED", "Approved for demo")
+    assert approved["status"] == "APPROVED"
 
     with pytest.raises(HTTPException) as error:
         check_in(
@@ -79,3 +89,24 @@ def test_leave_history_contains_cancelled_records() -> None:
     history = list_leaves(3)
     assert len(history) == 1
     assert history[0]["status"] == "CANCELLED"
+
+
+def test_only_admin_can_decide_leave() -> None:
+    leave = create_leave(
+        employee_id=5,
+        start_date=date(2026, 9, 24),
+        end_date=date(2026, 9, 24),
+        leave_type="CASUAL",
+        reason="Personal appointment",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        decide_leave(leave["id"], 1, "APPROVED", "Not allowed")
+    assert error.value.status_code == 403
+
+    pending = list_pending_leaves(4)
+    assert len(pending) == 1
+
+    rejected = decide_leave(leave["id"], 4, "REJECTED", "Team coverage needed")
+    assert rejected["status"] == "REJECTED"
+    assert rejected["manager_id"] == 4

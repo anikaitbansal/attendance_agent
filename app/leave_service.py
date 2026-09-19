@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 
-from app.database import employee_exists, get_connection
+from app.database import employee_exists, employee_is_admin, get_connection
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -24,6 +24,9 @@ def _get_leave(leave_id: int):
                 l.leave_type,
                 l.reason,
                 l.status,
+                l.manager_id,
+                l.decision_comment,
+                l.decided_at,
                 l.created_at,
                 l.updated_at
             FROM leaves AS l
@@ -96,7 +99,7 @@ def create_leave(
             SELECT id
             FROM leaves
             WHERE employee_id = ?
-              AND status = 'APPROVED'
+              AND status IN ('PENDING', 'APPROVED')
               AND NOT (end_date < ? OR start_date > ?)
             LIMIT 1
             """,
@@ -105,7 +108,7 @@ def create_leave(
         if overlapping_leave:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="An approved leave already overlaps the requested dates.",
+                detail="A pending or approved leave already overlaps the requested dates.",
             )
 
         timestamp = datetime.now(IST).isoformat(timespec="seconds")
@@ -114,7 +117,7 @@ def create_leave(
             INSERT INTO leaves (
                 employee_id, start_date, end_date, leave_type, reason,
                 status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'APPROVED', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
             """,
             (
                 employee_id,
@@ -150,6 +153,9 @@ def list_leaves(employee_id: int) -> list[dict]:
                 l.leave_type,
                 l.reason,
                 l.status,
+                l.manager_id,
+                l.decision_comment,
+                l.decided_at,
                 l.created_at,
                 l.updated_at
             FROM leaves AS l
@@ -169,10 +175,10 @@ def cancel_leave(leave_id: int) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Leave record not found.",
         )
-    if existing["status"] == "CANCELLED":
+    if existing["status"] in {"CANCELLED", "REJECTED"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This leave has already been cancelled.",
+            detail="This leave can no longer be cancelled.",
         )
 
     timestamp = datetime.now(IST).isoformat(timespec="seconds")
@@ -184,6 +190,110 @@ def cancel_leave(leave_id: int) -> dict:
             WHERE id = ?
             """,
             (timestamp, leave_id),
+        )
+
+    return dict(_get_leave(leave_id))
+
+
+def list_pending_leaves(manager_id: int) -> list[dict]:
+    if not employee_is_admin(manager_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an active manager or HR administrator can view this queue.",
+        )
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                l.id,
+                l.employee_id,
+                e.name AS employee_name,
+                l.start_date,
+                l.end_date,
+                l.leave_type,
+                l.reason,
+                l.status,
+                l.manager_id,
+                l.decision_comment,
+                l.decided_at,
+                l.created_at,
+                l.updated_at
+            FROM leaves AS l
+            JOIN employees AS e ON e.id = l.employee_id
+            WHERE l.status = 'PENDING'
+            ORDER BY l.created_at ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def decide_leave(
+    leave_id: int,
+    manager_id: int,
+    decision: str,
+    comment: str = "",
+) -> dict:
+    if not employee_is_admin(manager_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an active manager or HR administrator can decide leave.",
+        )
+
+    existing = _get_leave(leave_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Leave record not found.",
+        )
+    if existing["status"] != "PENDING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only pending leave requests can be approved or rejected.",
+        )
+
+    if decision == "APPROVED":
+        with get_connection() as connection:
+            conflict = connection.execute(
+                """
+                SELECT work_date
+                FROM attendance
+                WHERE employee_id = ? AND work_date BETWEEN ? AND ?
+                ORDER BY work_date
+                LIMIT 1
+                """,
+                (
+                    existing["employee_id"],
+                    existing["start_date"],
+                    existing["end_date"],
+                ),
+            ).fetchone()
+        if conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Leave cannot be approved because attendance already exists "
+                    f"for {conflict['work_date']}."
+                ),
+            )
+
+    timestamp = datetime.now(IST).isoformat(timespec="seconds")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE leaves
+            SET status = ?, manager_id = ?, decision_comment = ?,
+                decided_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                decision,
+                manager_id,
+                comment.strip() or None,
+                timestamp,
+                timestamp,
+                leave_id,
+            ),
         )
 
     return dict(_get_leave(leave_id))

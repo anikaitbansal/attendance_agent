@@ -62,6 +62,15 @@ class LeaveRecord(BaseModel):
     end_date: date
     leave_type: Literal["CASUAL", "SICK", "OTHER"]
     reason: str
-    status: Literal["APPROVED", "CANCELLED"]
+    status: Literal["PENDING", "APPROVED", "REJECTED", "CANCELLED"]
+    manager_id: int | None
+    decision_comment: str | None
+    decided_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class LeaveDecisionRequest(BaseModel):
+    manager_id: int = Field(gt=0)
+    decision: Literal["APPROVED", "REJECTED"]
+    comment: str = Field(default="", max_length=300)

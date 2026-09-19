@@ -28,6 +28,58 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _migrate_leave_workflow_if_needed(connection: sqlite3.Connection) -> None:
+    """Upgrade the earlier auto-approved leave table without losing demo data."""
+    table = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'leaves'"
+    ).fetchone()
+    if table is None or "PENDING" in table["sql"]:
+        return
+
+    connection.executescript(
+        """
+        DROP INDEX IF EXISTS idx_leaves_employee_dates;
+        ALTER TABLE leaves RENAME TO leaves_legacy;
+
+        CREATE TABLE leaves (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            leave_type TEXT NOT NULL CHECK (
+                leave_type IN ('CASUAL', 'SICK', 'OTHER')
+            ),
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
+                status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED')
+            ),
+            manager_id INTEGER,
+            decision_comment TEXT,
+            decided_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (employee_id) REFERENCES employees(id),
+            FOREIGN KEY (manager_id) REFERENCES employees(id),
+            CHECK (end_date >= start_date)
+        );
+
+        INSERT INTO leaves (
+            id, employee_id, start_date, end_date, leave_type, reason,
+            status, created_at, updated_at
+        )
+        SELECT
+            id, employee_id, start_date, end_date, leave_type, reason,
+            status, created_at, updated_at
+        FROM leaves_legacy;
+
+        DROP TABLE leaves_legacy;
+
+        CREATE INDEX idx_leaves_employee_dates
+        ON leaves (employee_id, start_date, end_date);
+        """
+    )
+
+
 def initialise_database() -> None:
     """Create the initial schema and seed six fictional employees."""
     with get_connection() as connection:
@@ -66,12 +118,16 @@ def initialise_database() -> None:
                     leave_type IN ('CASUAL', 'SICK', 'OTHER')
                 ),
                 reason TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'APPROVED' CHECK (
-                    status IN ('APPROVED', 'CANCELLED')
+                status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
+                    status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED')
                 ),
+                manager_id INTEGER,
+                decision_comment TEXT,
+                decided_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (employee_id) REFERENCES employees(id),
+                FOREIGN KEY (manager_id) REFERENCES employees(id),
                 CHECK (end_date >= start_date)
             );
 
@@ -82,6 +138,8 @@ def initialise_database() -> None:
             ON leaves (employee_id, start_date, end_date);
             """
         )
+
+        _migrate_leave_workflow_if_needed(connection)
 
         employee_count = connection.execute(
             "SELECT COUNT(*) AS count FROM employees"
@@ -123,3 +181,16 @@ def employee_exists(employee_id: int) -> bool:
             (employee_id,),
         ).fetchone()
     return row is not None
+
+
+def employee_is_admin(employee_id: int) -> bool:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT is_admin
+            FROM employees
+            WHERE id = ? AND is_active = 1
+            """,
+            (employee_id,),
+        ).fetchone()
+    return bool(row and row["is_admin"])

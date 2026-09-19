@@ -4,7 +4,13 @@ from fastapi import FastAPI
 
 from app.attendance_service import check_in, check_out, get_today
 from app.database import initialise_database, list_employees
-from app.leave_service import cancel_leave, create_leave, list_leaves
+from app.leave_service import (
+    cancel_leave,
+    create_leave,
+    decide_leave,
+    list_leaves,
+    list_pending_leaves,
+)
 from app.schemas import (
     AttendanceRecord,
     CheckInRequest,
@@ -12,6 +18,7 @@ from app.schemas import (
     Employee,
     HealthResponse,
     LeaveRecord,
+    LeaveDecisionRequest,
     LeaveRequest,
 )
 
@@ -74,3 +81,18 @@ def get_employee_leaves(employee_id: int) -> list[dict]:
 @app.delete("/leaves/{leave_id}", response_model=LeaveRecord)
 def delete_leave(leave_id: int) -> dict:
     return cancel_leave(leave_id)
+
+
+@app.get("/admin/leaves/pending", response_model=list[LeaveRecord])
+def get_pending_leaves(manager_id: int) -> list[dict]:
+    return list_pending_leaves(manager_id)
+
+
+@app.patch("/admin/leaves/{leave_id}/decision", response_model=LeaveRecord)
+def make_leave_decision(leave_id: int, request: LeaveDecisionRequest) -> dict:
+    return decide_leave(
+        leave_id=leave_id,
+        manager_id=request.manager_id,
+        decision=request.decision,
+        comment=request.comment,
+    )

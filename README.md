@@ -37,9 +37,12 @@ If it is omitted, the API uses the current time in Asia/Kolkata.
 
 ## Step 3 Leave endpoints
 
-- `POST /leaves` creates an automatically approved hackathon leave.
+- `POST /leaves` creates a pending leave request.
 - `GET /leaves/{employee_id}` returns leave history.
 - `DELETE /leaves/{leave_id}` cancels a leave without deleting its audit record.
+- `GET /admin/leaves/pending?manager_id=4` shows the manager queue.
+- `PATCH /admin/leaves/{leave_id}/decision` approves or rejects pending leave.
 
-Approved leave blocks check-in, attendance blocks conflicting leave, and
-overlapping approved leave requests are rejected.
+Only an active admin can decide leave. In production, the manager identity will
+come from authentication rather than the request. Approved leave blocks check-in,
+attendance blocks conflicting approval, and overlapping requests are rejected.
