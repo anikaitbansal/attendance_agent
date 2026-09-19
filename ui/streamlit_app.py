@@ -26,6 +26,22 @@ API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 TIMEOUT = 60
 ASSETS = Path(__file__).parent / "assets"
 
+KIND_LABELS = {
+    "CHECK_IN_REMINDER": "Check-in reminder",
+    "CHECK_OUT_REMINDER": "Check-out reminder",
+    "PENDING_LEAVE_DIGEST": "Approvals digest",
+    "LEAVE_REQUESTED": "Leave request",
+    "LEAVE_CANCELLED": "Leave cancelled",
+    "LEAVE_APPROVED": "Leave approved",
+    "LEAVE_REJECTED": "Leave rejected",
+}
+
+REMINDER_BUTTONS = [
+    ("CHECK_IN", "Check-in reminders"),
+    ("CHECK_OUT", "Check-out reminders"),
+    ("PENDING_DIGEST", "Approvals digest"),
+]
+
 st.set_page_config(
     page_title="KarmaVerse · Attendance Agent",
     page_icon=str(ASSETS / "karmaverse_icon.png"),
@@ -121,6 +137,23 @@ with st.sidebar:
     employee = by_label[label]
     employee_id = employee["id"]
     st.caption(f"{employee['department']} · {employee['email']}")
+
+    ok, inbox = api("GET", f"/notifications/{employee_id}")
+    if ok:
+        unread = [n for n in inbox if not n["is_read"]]
+        title = f"🔔 Notifications ({len(unread)} new)" if unread else "🔔 Notifications"
+        with st.expander(title, expanded=bool(unread)):
+            if not inbox:
+                st.caption("Nothing yet.")
+            for note in inbox[:8]:
+                marker = "**New** · " if not note["is_read"] else ""
+                st.markdown(f"{marker}{note['message']}")
+                when = f"{note['created_at'][:10]} {note['created_at'][11:16]}"
+                st.caption(f"{KIND_LABELS.get(note['kind'], note['kind'])} · {when}")
+            if unread and st.button("Mark all read"):
+                api("POST", f"/notifications/{employee_id}/read")
+                st.rerun()
+
     st.divider()
     st.caption(f"API: {API_BASE}")
     st.caption(f"Now (IST): {datetime.now(IST):%Y-%m-%d %H:%M}")
@@ -353,3 +386,28 @@ if admin_tab is not None:
             with reject_col:
                 if st.button("Reject", width="stretch"):
                     decide("REJECTED")
+
+        st.divider()
+        st.subheader("Reminders")
+        st.caption(
+            "Sent automatically on weekdays (IST): approvals digest at 09:30, "
+            "check-in at 10:00, check-out at 18:30. Send one now:"
+        )
+        for column, (kind, text) in zip(st.columns(3), REMINDER_BUTTONS):
+            with column:
+                if st.button(text, key=f"remind_{kind}", width="stretch"):
+                    ok, payload = api(
+                        "POST",
+                        "/admin/reminders/run",
+                        json={"manager_id": employee_id, "kind": kind},
+                    )
+                    if ok:
+                        names = payload["notified"]
+                        st.session_state["admin_flash"] = (
+                            f"{text} sent to {', '.join(names)}."
+                            if names
+                            else f"{text}: nobody needs one right now "
+                            "(or they were already reminded today)."
+                        )
+                        st.rerun()
+                    st.error(payload)

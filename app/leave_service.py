@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 
 from app.database import employee_exists, employee_is_admin, get_connection
+from app.notification_service import notify, notify_admins
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -131,7 +132,14 @@ def create_leave(
         )
         leave_id = cursor.lastrowid
 
-    return dict(_get_leave(leave_id))
+    leave = dict(_get_leave(leave_id))
+    notify_admins(
+        "LEAVE_REQUESTED",
+        f"{leave['employee_name']} requested {leave_type.lower()} leave "
+        f"from {start_value} to {end_value}.",
+        dedupe_key=f"LEAVE_REQUESTED:{leave_id}",
+    )
+    return leave
 
 
 def list_leaves(employee_id: int) -> list[dict]:
@@ -192,7 +200,14 @@ def cancel_leave(leave_id: int) -> dict:
             (timestamp, leave_id),
         )
 
-    return dict(_get_leave(leave_id))
+    leave = dict(_get_leave(leave_id))
+    notify_admins(
+        "LEAVE_CANCELLED",
+        f"{leave['employee_name']} cancelled their {existing['status'].lower()} "
+        f"leave from {leave['start_date']} to {leave['end_date']}.",
+        dedupe_key=f"LEAVE_CANCELLED:{leave_id}",
+    )
+    return leave
 
 
 def list_pending_leaves(manager_id: int) -> list[dict]:
@@ -296,4 +311,13 @@ def decide_leave(
             ),
         )
 
-    return dict(_get_leave(leave_id))
+    leave = dict(_get_leave(leave_id))
+    note = f" Comment: {leave['decision_comment']}" if leave["decision_comment"] else ""
+    notify(
+        leave["employee_id"],
+        f"LEAVE_{decision}",
+        f"Your leave from {leave['start_date']} to {leave['end_date']} "
+        f"was {decision.lower()}.{note}",
+        dedupe_key=f"LEAVE_DECISION:{leave_id}",
+    )
+    return leave

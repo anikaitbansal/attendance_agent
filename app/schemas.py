@@ -116,3 +116,28 @@ class AgentChatResponse(BaseModel):
     intent: str
     tool_used: str | None
     interpretation_source: Literal["groq", "fallback"]
+
+
+class NotificationRecord(BaseModel):
+    id: int
+    employee_id: int
+    kind: str
+    message: str
+    is_read: bool
+    sent_to_chat: bool
+    created_at: datetime
+
+
+class MarkReadResponse(BaseModel):
+    employee_id: int
+    updated: int
+
+
+class ReminderRunRequest(BaseModel):
+    manager_id: int = Field(gt=0)
+    kind: Literal["CHECK_IN", "CHECK_OUT", "PENDING_DIGEST"]
+
+
+class ReminderRunResponse(BaseModel):
+    kind: str
+    notified: list[str]

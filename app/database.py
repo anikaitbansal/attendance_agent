@@ -136,6 +136,22 @@ def initialise_database() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_leaves_employee_dates
             ON leaves (employee_id, start_date, end_date);
+
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                message TEXT NOT NULL,
+                -- Stops a reminder job that runs twice from notifying twice.
+                dedupe_key TEXT UNIQUE,
+                is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+                sent_to_chat INTEGER NOT NULL DEFAULT 0 CHECK (sent_to_chat IN (0, 1)),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (employee_id) REFERENCES employees(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notifications_employee
+            ON notifications (employee_id, is_read, created_at);
             """
         )
 

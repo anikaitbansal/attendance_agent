@@ -18,6 +18,8 @@ from app.query_service import (
     get_missing_checkouts,
     get_weekly_hours,
 )
+from app.notification_service import list_notifications, mark_all_read
+from app.reminder_service import run_reminder_now, start_scheduler
 from app.schemas import (
     AgentChatRequest,
     AgentChatResponse,
@@ -32,13 +34,20 @@ from app.schemas import (
     LeaveDecisionRequest,
     LeaveRequest,
     WeeklyHoursSummary,
+    MarkReadResponse,
+    NotificationRecord,
+    ReminderRunRequest,
+    ReminderRunResponse,
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialise_database()
+    scheduler = start_scheduler()
     yield
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -122,3 +131,19 @@ def chat_with_agent(request: AgentChatRequest) -> AgentChatResponse:
         history=[turn.model_dump() for turn in request.history],
     )
     return AgentChatResponse(employee_id=request.employee_id, reply=reply)
+
+
+@app.get("/notifications/{employee_id}", response_model=list[NotificationRecord])
+def get_notifications(employee_id: int, unread_only: bool = False) -> list[dict]:
+    return list_notifications(employee_id, unread_only)
+
+
+@app.post("/notifications/{employee_id}/read", response_model=MarkReadResponse)
+def read_notifications(employee_id: int) -> MarkReadResponse:
+    return MarkReadResponse(employee_id=employee_id, updated=mark_all_read(employee_id))
+
+
+@app.post("/admin/reminders/run", response_model=ReminderRunResponse)
+def trigger_reminders(request: ReminderRunRequest) -> ReminderRunResponse:
+    notified = run_reminder_now(request.kind, request.manager_id)
+    return ReminderRunResponse(kind=request.kind, notified=notified)

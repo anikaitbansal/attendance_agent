@@ -46,3 +46,62 @@ If it is omitted, the API uses the current time in Asia/Kolkata.
 Only an active admin can decide leave. In production, the manager identity will
 come from authentication rather than the request. Approved leave blocks check-in,
 attendance blocks conflicting approval, and overlapping requests are rejected.
+
+## Step 4 Chat agent
+
+`POST /agent/chat` accepts `{employee_id, message, history}` and replies in
+plain language. It is a LangGraph ReAct agent over Groq that calls the same
+service functions the REST endpoints use, so every business rule above still
+applies.
+
+Copy `.env.example` to `.env` and add a free key from
+<https://console.groq.com/keys>:
+
+```
+GROQ_API_KEY=gsk_...
+```
+
+Without a key the endpoint returns 503 and the rest of the API keeps working.
+`GET /health` reports `agent_ready` so the UI can hide the chat box.
+
+## Step 5 Streamlit demo UI
+
+```powershell
+.venv\Scripts\Activate.ps1
+streamlit run ui/streamlit_app.py
+```
+
+Open `http://localhost:8501` with the API already running. Pick an employee in
+the sidebar, then use the Chat, Attendance and Leave tabs. Point the UI at a
+different API with `API_BASE_URL`.
+
+Admins (the seeded HR user is Meera Iyer, #4) also get an Admin tab to approve
+or reject pending leave and to send reminders on demand.
+
+## Step 6 Reminders and notifications
+
+Every notification is stored in the database and shown in the sidebar inbox.
+If `GOOGLE_CHAT_WEBHOOK_URL` is set in `.env`, it is also posted to that Google
+Chat space; a failing webhook never blocks the action that caused it.
+
+Event notifications come from the service layer, so they fire for REST calls
+and for chat agent actions alike:
+
+- leave requested or cancelled → every admin
+- leave approved or rejected → the employee
+
+Scheduled reminders run on weekdays in Asia/Kolkata time:
+
+| Time  | Reminder | Who |
+|-------|----------|-----|
+| 09:30 | Approvals digest | admins, when requests are pending |
+| 10:00 | Check-in | staff with no attendance and no approved leave today |
+| 18:30 | Check-out | staff who checked in but have not checked out |
+
+Each reminder goes out at most once per person per day. Set
+`REMINDERS_ENABLED=false` to turn the scheduler off.
+
+- `GET /notifications/{employee_id}?unread_only=false`
+- `POST /notifications/{employee_id}/read`
+- `POST /admin/reminders/run` with `{manager_id, kind}` where `kind` is
+  `CHECK_IN`, `CHECK_OUT` or `PENDING_DIGEST` — the demo shortcut
