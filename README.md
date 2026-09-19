@@ -46,18 +46,3 @@ If it is omitted, the API uses the current time in Asia/Kolkata.
 Only an active admin can decide leave. In production, the manager identity will
 come from authentication rather than the request. Approved leave blocks check-in,
 attendance blocks conflicting approval, and overlapping requests are rejected.
-
-## Step 4 Query and reporting endpoints
-
-- `GET /attendance/{employee_id}/history` returns a date-filtered history.
-- `GET /reports/{employee_id}/weekly-hours` calculates weekly totals.
-- `GET /admin/attendance/missing-checkout` lists open sessions for managers.
-
-These deterministic functions will be exposed as tools to the LangGraph agent.
-
-## Step 5 LangGraph and Groq agent
-
-`POST /agent/chat` interprets natural-language requests and routes them through
-a LangGraph workflow to deterministic attendance and leave tools. Groq is used
-for intent extraction when `GROQ_API_KEY` is configured. A local fallback keeps
-the main demo flows available if the key or network is unavailable.

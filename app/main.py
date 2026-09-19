@@ -3,7 +3,7 @@ from datetime import date
 
 from fastapi import FastAPI
 
-from app.agent_service import run_agent
+from app.agent import agent_is_configured, run_agent
 from app.attendance_service import check_in, check_out, get_today
 from app.database import initialise_database, list_employees
 from app.leave_service import (
@@ -19,6 +19,8 @@ from app.query_service import (
     get_weekly_hours,
 )
 from app.schemas import (
+    AgentChatRequest,
+    AgentChatResponse,
     AttendanceRecord,
     AgentChatRequest,
     AgentChatResponse,
@@ -49,7 +51,11 @@ app = FastAPI(
 
 @app.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
-    return HealthResponse(status="ok", service="attendance-agent")
+    return HealthResponse(
+        status="ok",
+        service="attendance-agent",
+        agent_ready=agent_is_configured(),
+    )
 
 
 @app.get("/employees", response_model=list[Employee])
@@ -108,44 +114,11 @@ def make_leave_decision(leave_id: int, request: LeaveDecisionRequest) -> dict:
     )
 
 
-@app.get(
-    "/attendance/{employee_id}/history",
-    response_model=list[AttendanceRecord],
-)
-def get_employee_attendance_history(
-    employee_id: int,
-    start_date: date | None = None,
-    end_date: date | None = None,
-) -> list[dict]:
-    return get_attendance_history(employee_id, start_date, end_date)
-
-
-@app.get(
-    "/reports/{employee_id}/weekly-hours",
-    response_model=WeeklyHoursSummary,
-)
-def get_employee_weekly_hours(
-    employee_id: int,
-    week_start: date | None = None,
-) -> dict:
-    return get_weekly_hours(employee_id, week_start)
-
-
-@app.get(
-    "/admin/attendance/missing-checkout",
-    response_model=list[AttendanceRecord],
-)
-def get_missing_checkout_report(
-    manager_id: int,
-    work_date: date | None = None,
-) -> list[dict]:
-    return get_missing_checkouts(manager_id, work_date)
-
-
 @app.post("/agent/chat", response_model=AgentChatResponse)
-def chat_with_attendance_agent(request: AgentChatRequest) -> dict:
-    return run_agent(
-        employee_id=request.employee_id,
+def chat_with_agent(request: AgentChatRequest) -> AgentChatResponse:
+    reply = run_agent(
         message=request.message,
-        manager_id=request.manager_id,
+        employee_id=request.employee_id,
+        history=[turn.model_dump() for turn in request.history],
     )
+    return AgentChatResponse(employee_id=request.employee_id, reply=reply)
