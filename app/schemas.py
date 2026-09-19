@@ -18,6 +18,7 @@ class Employee(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+    agent_ready: bool = False
 
 
 class CheckInRequest(BaseModel):
@@ -52,6 +53,22 @@ class LeaveRequest(BaseModel):
     end_date: date
     leave_type: Literal["CASUAL", "SICK", "OTHER"] = "CASUAL"
     reason: str = Field(min_length=3, max_length=300)
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class AgentChatRequest(BaseModel):
+    employee_id: int = Field(gt=0)
+    message: str = Field(min_length=1, max_length=1000)
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+class AgentChatResponse(BaseModel):
+    employee_id: int
+    reply: str
 
 
 class LeaveRecord(BaseModel):

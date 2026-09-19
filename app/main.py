@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agent import agent_is_configured, run_agent
 from app.attendance_service import check_in, check_out, get_today
 from app.database import initialise_database, list_employees
 from app.leave_service import (
@@ -12,6 +13,8 @@ from app.leave_service import (
     list_pending_leaves,
 )
 from app.schemas import (
+    AgentChatRequest,
+    AgentChatResponse,
     AttendanceRecord,
     CheckInRequest,
     CheckOutRequest,
@@ -39,7 +42,11 @@ app = FastAPI(
 
 @app.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
-    return HealthResponse(status="ok", service="attendance-agent")
+    return HealthResponse(
+        status="ok",
+        service="attendance-agent",
+        agent_ready=agent_is_configured(),
+    )
 
 
 @app.get("/employees", response_model=list[Employee])
@@ -96,3 +103,13 @@ def make_leave_decision(leave_id: int, request: LeaveDecisionRequest) -> dict:
         decision=request.decision,
         comment=request.comment,
     )
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+def chat_with_agent(request: AgentChatRequest) -> AgentChatResponse:
+    reply = run_agent(
+        message=request.message,
+        employee_id=request.employee_id,
+        history=[turn.model_dump() for turn in request.history],
+    )
+    return AgentChatResponse(employee_id=request.employee_id, reply=reply)
