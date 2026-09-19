@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+DB_PATH = DATA_DIR / "attendance.db"
+
+
+@contextmanager
+def get_connection() -> Iterator[sqlite3.Connection]:
+    """Open a SQLite connection that returns rows like dictionaries."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def initialise_database() -> None:
+    """Create the initial schema and seed six fictional employees."""
+    with get_connection() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS employees (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                department TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
+                is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
+            );
+
+            CREATE TABLE IF NOT EXISTS attendance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER NOT NULL,
+                work_date TEXT NOT NULL,
+                work_mode TEXT NOT NULL CHECK (work_mode IN ('OFFICE', 'WFH')),
+                check_in TEXT NOT NULL,
+                check_out TEXT,
+                break_minutes INTEGER NOT NULL DEFAULT 0 CHECK (break_minutes >= 0),
+                worked_minutes INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (employee_id) REFERENCES employees(id),
+                UNIQUE (employee_id, work_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS leaves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                leave_type TEXT NOT NULL CHECK (
+                    leave_type IN ('CASUAL', 'SICK', 'OTHER')
+                ),
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'APPROVED' CHECK (
+                    status IN ('APPROVED', 'CANCELLED')
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (employee_id) REFERENCES employees(id),
+                CHECK (end_date >= start_date)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_attendance_employee_date
+            ON attendance (employee_id, work_date);
+
+            CREATE INDEX IF NOT EXISTS idx_leaves_employee_dates
+            ON leaves (employee_id, start_date, end_date);
+            """
+        )
+
+        employee_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM employees"
+        ).fetchone()["count"]
+
+        if employee_count == 0:
+            connection.executemany(
+                """
+                INSERT INTO employees (id, name, email, department, is_admin)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (1, "Aarav Mehta", "aarav@example.com", "Engineering", 0),
+                    (2, "Diya Sharma", "diya@example.com", "Operations", 0),
+                    (3, "Kabir Verma", "kabir@example.com", "Sales", 0),
+                    (4, "Meera Iyer", "meera@example.com", "HR", 1),
+                    (5, "Rohan Gupta", "rohan@example.com", "Finance", 0),
+                    (6, "Sara Khan", "sara@example.com", "Product", 0),
+                ],
+            )
+
+
+def list_employees() -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name, email, department, is_admin, is_active
+            FROM employees
+            ORDER BY id
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def employee_exists(employee_id: int) -> bool:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT 1 FROM employees WHERE id = ? AND is_active = 1",
+            (employee_id,),
+        ).fetchone()
+    return row is not None
