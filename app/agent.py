@@ -84,7 +84,10 @@ def request_leave(
     reason: str,
     leave_type: str = "CASUAL",
 ) -> Any:
-    """Request leave between two ISO dates. leave_type is CASUAL, SICK or OTHER."""
+    """Request leave between two ISO dates. leave_type is CASUAL, SICK or OTHER.
+
+    The leave is created as PENDING and needs a manager decision before it counts.
+    """
     normalised = leave_type.strip().upper()
     if normalised not in {"CASUAL", "SICK", "OTHER"}:
         return "ERROR: leave_type must be CASUAL, SICK or OTHER."
@@ -104,7 +107,7 @@ def show_my_leaves(employee_id: int) -> Any:
 
 @tool
 def cancel_my_leave(leave_id: int) -> Any:
-    """Cancel an approved leave by its leave id."""
+    """Cancel a pending or approved leave by its leave id."""
     return _call(cancel_leave, leave_id)
 
 

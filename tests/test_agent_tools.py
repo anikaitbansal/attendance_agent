@@ -62,7 +62,7 @@ def test_leave_tools_create_list_and_cancel() -> None:
             "leave_type": "casual",
         }
     )
-    assert leave["status"] == "APPROVED"
+    assert leave["status"] == "PENDING"
     assert leave["leave_type"] == "CASUAL"
 
     assert [row["id"] for row in show_my_leaves.invoke({"employee_id": 4})] == [
