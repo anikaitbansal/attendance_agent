@@ -79,7 +79,13 @@ with st.sidebar:
 
 st.title("AI Attendance Agent")
 
-chat_tab, attendance_tab, leave_tab = st.tabs(["Chat", "Attendance", "Leave"])
+labels = ["Chat", "Attendance", "Leave"]
+if employee["is_admin"]:
+    labels.append("Admin")
+
+tabs = st.tabs(labels)
+chat_tab, attendance_tab, leave_tab = tabs[0], tabs[1], tabs[2]
+admin_tab = tabs[3] if employee["is_admin"] else None
 
 
 with chat_tab:
@@ -185,7 +191,7 @@ with leave_tab:
                         "reason": reason.strip(),
                     },
                 )
-                show(ok, payload, "Leave approved.")
+                show(ok, payload, "Leave requested — waiting for a manager decision.")
 
     with right:
         st.subheader("Leave history")
@@ -208,15 +214,90 @@ with leave_tab:
                     for leave in leaves
                 ],
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
 
-            approved = [
-                leave["id"] for leave in leaves if leave["status"] == "APPROVED"
+            cancellable = [
+                leave["id"]
+                for leave in leaves
+                if leave["status"] in {"PENDING", "APPROVED"}
             ]
-            if approved:
-                leave_id = st.selectbox("Cancel leave id", approved)
+            if cancellable:
+                leave_id = st.selectbox("Cancel leave id", cancellable)
                 if st.button("Cancel leave"):
                     ok, payload = api("DELETE", f"/leaves/{leave_id}")
                     show(ok, payload, f"Leave {leave_id} cancelled.")
                     st.rerun()
+
+
+if admin_tab is not None:
+    with admin_tab:
+        # Survives the rerun that refreshes the queue after a decision.
+        if flash := st.session_state.pop("admin_flash", None):
+            st.success(flash)
+
+        st.subheader("Pending leave queue")
+        ok, pending = api(
+            "GET", "/admin/leaves/pending", params={"manager_id": employee_id}
+        )
+
+        if not ok:
+            st.error(pending)
+        elif not pending:
+            st.info("Nothing is waiting for a decision.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "id": leave["id"],
+                        "who": leave["employee_name"],
+                        "from": leave["start_date"],
+                        "to": leave["end_date"],
+                        "type": leave["leave_type"],
+                        "reason": leave["reason"],
+                    }
+                    for leave in pending
+                ],
+                hide_index=True,
+                width="stretch",
+            )
+
+            st.divider()
+            st.subheader("Decide")
+
+            by_id = {leave["id"]: leave for leave in pending}
+            leave_id = st.selectbox(
+                "Leave request",
+                list(by_id),
+                format_func=lambda i: (
+                    f"#{i} · {by_id[i]['employee_name']} · "
+                    f"{by_id[i]['start_date']} to {by_id[i]['end_date']}"
+                ),
+            )
+            st.caption(f"{by_id[leave_id]['leave_type']} · {by_id[leave_id]['reason']}")
+            comment = st.text_input("Comment (optional)", max_chars=300)
+
+            def decide(decision: str) -> None:
+                ok, payload = api(
+                    "PATCH",
+                    f"/admin/leaves/{leave_id}/decision",
+                    json={
+                        "manager_id": employee_id,
+                        "decision": decision,
+                        "comment": comment,
+                    },
+                )
+                if ok:
+                    st.session_state["admin_flash"] = (
+                        f"Leave {leave_id} {decision.lower()}."
+                    )
+                    st.rerun()
+                st.error(payload)
+
+            approve_col, reject_col = st.columns(2)
+            with approve_col:
+                if st.button("Approve", type="primary", width="stretch"):
+                    decide("APPROVED")
+            with reject_col:
+                if st.button("Reject", width="stretch"):
+                    decide("REJECTED")
