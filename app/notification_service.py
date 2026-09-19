@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
+import urllib3.util.connection
 from fastapi import HTTPException, status
 
 from app.database import employee_exists, get_connection
@@ -15,6 +17,17 @@ IST = ZoneInfo("Asia/Kolkata")
 CHAT_TIMEOUT_SECONDS = 5
 
 logger = logging.getLogger(__name__)
+
+# Many home and office networks resolve Google to IPv6 addresses they cannot
+# route. urllib3 then waits out a timeout on every IPv6 address before trying
+# IPv4, which took ~45 s per message on the dev machine. In the API process
+# only this webhook uses urllib3 (Groq uses httpx), so IPv4-only is contained.
+urllib3.util.connection.HAS_IPV6 = False
+
+# Chat delivery happens off the request thread so a slow or unreachable
+# webhook never delays a check-in, a leave action or a reminder run.
+_chat_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="google-chat")
+_pending: set[Future] = set()
 
 
 def _post_to_google_chat(employee_name: str, message: str) -> bool:
@@ -67,6 +80,17 @@ def notify(
             "SELECT name FROM employees WHERE id = ?", (employee_id,)
         ).fetchone()["name"]
 
+    if os.getenv("GOOGLE_CHAT_WEBHOOK_URL", "").strip():
+        future = _chat_pool.submit(
+            _deliver_to_chat, notification_id, employee_name, message
+        )
+        _pending.add(future)
+        future.add_done_callback(_pending.discard)
+
+    return _get_notification(notification_id)
+
+
+def _deliver_to_chat(notification_id: int, employee_name: str, message: str) -> None:
     if _post_to_google_chat(employee_name, message):
         with get_connection() as connection:
             connection.execute(
@@ -74,7 +98,10 @@ def notify(
                 (notification_id,),
             )
 
-    return _get_notification(notification_id)
+
+def wait_for_chat_deliveries(timeout: float = 30) -> None:
+    """Block until queued Google Chat posts finish. Used by tests and scripts."""
+    wait(list(_pending), timeout=timeout)
 
 
 def notify_admins(kind: str, message: str, dedupe_key: str | None = None) -> None:

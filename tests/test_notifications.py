@@ -12,7 +12,11 @@ import app.notification_service as notification_service
 from app.attendance_service import check_in
 from app.leave_service import cancel_leave, create_leave, decide_leave
 from app.main import app
-from app.notification_service import list_notifications, mark_all_read
+from app.notification_service import (
+    list_notifications,
+    mark_all_read,
+    wait_for_chat_deliveries,
+)
 from app.reminder_service import (
     run_reminder_now,
     send_check_in_reminders,
@@ -119,6 +123,7 @@ def test_google_chat_webhook_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(notification_service.requests, "post", fake_post)
     check_in(1, "OFFICE")
     send_check_out_reminders()
+    wait_for_chat_deliveries()
     assert sent[0][0] == "https://chat.example.com/hook"
     assert sent[0][1].startswith("*Aarav Mehta* — You checked in at")
     assert list_notifications(1)[0]["sent_to_chat"] == 1
@@ -130,6 +135,7 @@ def test_google_chat_webhook_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(notification_service.requests, "post", broken_post)
     day = future_day()
     leave = create_leave(3, day, day, "CASUAL", "Wedding")
+    wait_for_chat_deliveries()
     assert leave["status"] == "PENDING"
     assert list_notifications(ADMIN_ID)[0]["sent_to_chat"] == 0
 
@@ -150,3 +156,26 @@ def test_notification_and_reminder_endpoints() -> None:
     assert len(run.json()["notified"]) == 6
     assert inbox.json()[0]["kind"] == "CHECK_IN_REMINDER"
     assert read.json() == {"employee_id": 2, "updated": 1}
+
+
+def test_slow_webhook_does_not_delay_the_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    class Ok:
+        def raise_for_status(self) -> None:
+            pass
+
+    def slow_post(*_, **__):
+        time.sleep(3)
+        return Ok()
+
+    monkeypatch.setenv("GOOGLE_CHAT_WEBHOOK_URL", "https://chat.example.com/hook")
+    monkeypatch.setattr(notification_service.requests, "post", slow_post)
+
+    started = time.monotonic()
+    day = future_day()
+    create_leave(5, day, day, "SICK", "Dentist appointment")
+    assert time.monotonic() - started < 1
+
+    wait_for_chat_deliveries()
+    assert list_notifications(ADMIN_ID)[0]["sent_to_chat"] == 1
